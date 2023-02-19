@@ -13,7 +13,6 @@ const blocksBucket = "blocks"
 
 // Blockchain keeps a sequence of Blocks
 type BlockChain struct {
-	// blocks []*Block
 	tip []byte
 	db  *bolt.DB
 }
@@ -66,6 +65,7 @@ func (bc *BlockChain) AddBlock(data string) {
 	fmt.Printf("add a block using time is %d ms\n\n", b-a)
 }
 
+// Iterator ...
 func (bc *BlockChain) Iterator() *BlockChainIterator {
 	iter := &BlockChainIterator{bc.tip, bc.db}
 	return iter
@@ -93,6 +93,7 @@ func (iter *BlockChainIterator) Next() *Block {
 }
 
 // NewBlockchain creates a new Blockchain with genesis Block
+// InitBlockChain
 func NewBlockChain() *BlockChain {
 	// return &BlockChain{[]*Block{NewGenesisBlock()}}
 	var tip []byte

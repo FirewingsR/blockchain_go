@@ -3,17 +3,23 @@ package main
 import (
 	"fmt"
 	"math/big"
+	"os"
 )
 
 func main() {
+	defer os.Exit(0)
 
 	fmt.Println("main")
 
 	bc := NewBlockChain()
+	defer bc.db.Close()
 	bc.AddBlock("Send 1 BTC To Densey")
 	bc.AddBlock("Send 2 more BTC To Densey")
 
-	printChain(bc.Iterator())
+	// printChain(bc.Iterator())
+
+	cli := CLI{bc}
+	cli.Run()
 }
 
 func main2() {

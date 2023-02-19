@@ -14,9 +14,5 @@ func IntToHex(num int64) []byte {
 		log.Panic(err)
 	}
 
-	ret := buff.Bytes()
-
-	// fmt.Printf("\nnum: %d , ret: %v\n", num, ret)
-
-	return ret
+	return buff.Bytes()
 }

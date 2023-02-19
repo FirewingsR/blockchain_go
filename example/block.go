@@ -30,6 +30,7 @@ func (b *Block) Serialize() []byte {
 }
 
 // NewBlock creates and returns Block
+// CreateBlock
 func NewBlock(data string, prevBlockHash []byte) *Block {
 	block := &Block{prevBlockHash, time.Now().Unix(), []byte{}, []byte(data), 0}
 
@@ -43,6 +44,7 @@ func NewBlock(data string, prevBlockHash []byte) *Block {
 }
 
 // NewGenesisBlock creates and returns genesis Block
+// Genesis
 func NewGenesisBlock() *Block {
 	return NewBlock("Genesis Block", []byte{})
 }
