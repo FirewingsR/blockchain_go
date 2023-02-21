@@ -12,8 +12,9 @@ func main() {
 
 func main2() {
 
-	printTarget(8)
-	printTarget(256 - targetBits)
+	a := ValidateAddress("1NSgvKsJSVEHJZECndxKfVKC$WG7hGEuo$")
+
+	fmt.Print("a is ", a)
 
 }
 
