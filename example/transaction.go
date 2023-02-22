@@ -79,6 +79,8 @@ func (tx *Transaction) Hash() []byte {
 // }
 
 // Sign signs each input of a Transaction
+// 标识要消费的UTXO（UTXO-IN）属于自己的过程
+// 这在Verity函数中由Validator验证。
 func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transaction) {
 	if tx.IsCoinbase() {
 		return
@@ -90,8 +92,14 @@ func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transac
 		}
 	}
 
+	// Signature 和 Pub Key field 通过复制空事务来创建。
 	txCopy := tx.TrimmedCopy()
 
+	// 在事务的每个输入中签名。
+	// 对于每个输入，通过以下过程。
+	// 1. 检查输入的以前事务，获取并保存Pub KeyHash。
+	// 2. 使用事务和private key获取签名。
+	// 3. 将Signature添加到事务处理中。
 	for inID, vin := range txCopy.Vin {
 		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
 		txCopy.Vin[inID].Signature = nil
@@ -164,8 +172,10 @@ func (tx *Transaction) Verify(prevTXs map[string]Transaction) bool {
 	}
 
 	txCopy := tx.TrimmedCopy()
+	// 使用P-256（secp256r1）elliptic curve（比特币使用secp256k1）
 	curve := elliptic.P256()
 
+	// 用Public key判断每个Input中包含的Signature是否有效。
 	for inID, vin := range tx.Vin {
 		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
 		txCopy.Vin[inID].Signature = nil
@@ -186,18 +196,27 @@ func (tx *Transaction) Verify(prevTXs map[string]Transaction) bool {
 		y.SetBytes(vin.PubKey[(keyLen / 2):])
 
 		rawPubKey := ecdsa.PublicKey{curve, &x, &y}
+		// 使用公钥和事务的哈希值、Signature（R，S）来判断有效性。
 		if ecdsa.Verify(&rawPubKey, txCopy.ID, &r, &s) == false {
 			return false
 		}
 	}
 
+	// 如果所有输入（UTXO-IN）都通过了检查，则验证成功
 	return true
 }
 
 // NewCoinbaseTX creates a new coinbase transaction
+// CoinbaseTx
 func NewCoinbaseTX(to, data string) *Transaction {
 	if data == "" {
-		data = fmt.Sprintf("Reward to '%s'", to)
+		randData := make([]byte, 20)
+		_, err := rand.Read(randData)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		data = fmt.Sprintf("%x", randData)
 	}
 
 	txin := TXInput{[]byte{}, -1, nil, []byte(data)}
@@ -209,7 +228,8 @@ func NewCoinbaseTX(to, data string) *Transaction {
 }
 
 // NewUTXOTransaction creates a new transaction
-func NewUTXOTransaction(from, to string, amount int, bc *BlockChain) *Transaction {
+// NewTransaction
+func NewUTXOTransaction(from, to string, amount int, UTXOSet *UTXOSet) *Transaction {
 	var inputs []TXInput
 	var outputs []TXOutput
 
@@ -219,7 +239,7 @@ func NewUTXOTransaction(from, to string, amount int, bc *BlockChain) *Transactio
 	}
 	wallet := wallets.GetWallet(from)
 	pubKeyHash := HashPubKey(wallet.PublicKey)
-	acc, validOutputs := bc.FindSpendableOutputs(pubKeyHash, amount)
+	acc, validOutputs := UTXOSet.FindSpendableOutputs(pubKeyHash, amount)
 
 	if acc < amount {
 		log.Panic("ERROR: Not enough funds")
@@ -238,6 +258,12 @@ func NewUTXOTransaction(from, to string, amount int, bc *BlockChain) *Transactio
 		}
 	}
 
+	// 现在我们已经收集了用作事务输入的所有UTXO。
+	// 其价值之和将为acc。
+	// 事务的输出是要发送的TXO，余额（要返回的）TXO
+	// 总是由两个组成
+
+	// 创建要发送的TXO
 	// Build a list of outputs
 	outputs = append(outputs, *NewTXOutput(amount, to))
 	if acc > amount {
@@ -246,7 +272,7 @@ func NewUTXOTransaction(from, to string, amount int, bc *BlockChain) *Transactio
 
 	tx := Transaction{nil, inputs, outputs}
 	tx.ID = tx.Hash()
-	bc.SignTransaction(&tx, wallet.PrivateKey)
+	UTXOSet.BlockChain.SignTransaction(&tx, wallet.PrivateKey)
 
 	return &tx
 }
