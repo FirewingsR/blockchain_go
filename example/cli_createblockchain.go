@@ -5,11 +5,11 @@ import (
 	"log"
 )
 
-func (cli *CLI) createBlockChain(address string) {
+func (cli *CLI) createBlockChain(address, nodeID string) {
 	if !ValidateAddress(address) {
 		log.Panic("ERROR: Address is not valid")
 	}
-	bc := CreateBlockChain(address)
+	bc := CreateBlockChain(address, nodeID)
 	defer bc.db.Close()
 	UTXOSet := UTXOSet{bc}
 	UTXOSet.Reindex()
