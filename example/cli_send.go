@@ -6,6 +6,7 @@ import (
 )
 
 func (cli *CLI) send(from, to string, amount int, nodeID string, mineNow bool) {
+
 	if !ValidateAddress(from) {
 		log.Panic("ERROR: Sender address is not valid")
 	}
@@ -17,11 +18,11 @@ func (cli *CLI) send(from, to string, amount int, nodeID string, mineNow bool) {
 	UTXOSet := UTXOSet{bc}
 	defer bc.db.Close()
 
-	wallets, err := NewWallets(nodeID)
-	if err != nil {
-		log.Panic(err)
-	}
-	wallet := wallets.GetWallet(from)
+	// wallets, err := NewWallets(nodeID)
+	// if err != nil {
+	// 	log.Panic(err)
+	// }
+	wallet := cli.wallets.GetWallet(from)
 
 	tx := NewUTXOTransaction(&wallet, to, amount, &UTXOSet)
 

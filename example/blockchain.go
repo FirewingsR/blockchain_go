@@ -357,6 +357,7 @@ func (bc *BlockChain) GetBlockHashes() [][]byte {
 }
 
 // MineBlock mines a new block with the provided transactions
+// MintBlock
 func (bc *BlockChain) MineBlock(transactions []*Transaction) *Block {
 	a := time.Now().UnixMilli()
 
@@ -370,6 +371,7 @@ func (bc *BlockChain) MineBlock(transactions []*Transaction) *Block {
 		}
 	}
 
+	// 获取最近块的Hash
 	err := bc.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(blocksBucket))
 		lastHash = b.Get([]byte("l"))

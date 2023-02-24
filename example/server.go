@@ -9,6 +9,11 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"os"
+	"runtime"
+	"syscall"
+
+	DEATH "github.com/vrecan/death/v3"
 )
 
 const protocol = "tcp"
@@ -17,7 +22,7 @@ const commandLength = 12
 
 var nodeAddress string
 var miningAddress string
-var knownNodes = []string{"localhost:3000"}
+var knownNodes = []string{"localhost:30000"}
 var blocksInTransit = [][]byte{}
 var mempool = make(map[string]Transaction)
 
@@ -323,6 +328,7 @@ func handleTx(request []byte, bc *BlockChain) {
 			var txs []*Transaction
 
 			for id := range mempool {
+				fmt.Printf("tx: ^s\n", mempool[id].ID)
 				tx := mempool[id]
 				if bc.VerifyTransaction(&tx) {
 					txs = append(txs, &tx)
@@ -414,7 +420,7 @@ func handleConnection(conn net.Conn, bc *BlockChain) {
 		fmt.Println("Unknown command!")
 	}
 
-	conn.Close()
+	defer conn.Close()
 }
 
 // StartServer starts a node
@@ -428,6 +434,8 @@ func StartServer(nodeID, minerAddress string) {
 	defer ln.Close()
 
 	bc := NewBlockChain(nodeID)
+	defer bc.db.Close()
+	go CloseDB(bc)
 
 	if nodeAddress != knownNodes[0] {
 		sendVersion(knownNodes[0], bc)
@@ -462,4 +470,16 @@ func nodeIsKnown(addr string) bool {
 	}
 
 	return false
+}
+
+// 安全的 DB close
+func CloseDB(bc *BlockChain) {
+	// SIGINT, SIGTERM : unix, linux / Interrupt : window
+	d := DEATH.NewDeath(syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+
+	d.WaitForDeathWithFunc(func() {
+		defer os.Exit(1)
+		defer runtime.Goexit()
+		bc.db.Close()
+	})
 }

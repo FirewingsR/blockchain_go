@@ -5,7 +5,9 @@ import (
 	"log"
 )
 
-func (cli *CLI) createBlockChain(address, nodeID string) {
+func (cli *CLI) createBlockChain(alias, nodeID string) {
+	address := cli.wallets.GetAddress(alias)
+	fmt.Printf("address: %s\n", address)
 	if !ValidateAddress(address) {
 		log.Panic("ERROR: Address is not valid")
 	}

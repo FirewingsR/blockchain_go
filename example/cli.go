@@ -8,7 +8,9 @@ import (
 )
 
 // CLI responsible for processing command line arguments
-type CLI struct{}
+type CLI struct {
+	wallets *Wallets
+}
 
 func (cli *CLI) printUsage() {
 	fmt.Println("Usage:")
@@ -30,14 +32,14 @@ func (cli *CLI) validateArgs() {
 }
 
 // Run parses command line arguments and processes commands
-func (cli *CLI) Run() {
+func (cli *CLI) Run(nodeID string) {
 	cli.validateArgs()
 
-	nodeID := os.Getenv("NODE_ID")
-	if nodeID == "" {
-		fmt.Printf("NODE_ID env. var is not set!")
-		os.Exit(1)
-	}
+	// nodeID := os.Getenv("NODE_ID")
+	// if nodeID == "" {
+	// 	fmt.Printf("NODE_ID env. var is not set!")
+	// 	os.Exit(1)
+	// }
 
 	getBalanceCmd := flag.NewFlagSet("getbalance", flag.ExitOnError)
 	createBlockChainCmd := flag.NewFlagSet("createblockchain", flag.ExitOnError)
@@ -54,6 +56,7 @@ func (cli *CLI) Run() {
 	sendTo := sendCmd.String("to", "", "Destination wallet address")
 	sendAmount := sendCmd.Int("amount", 0, "Amount to send")
 	sendMine := sendCmd.Bool("mine", false, "Mine immediately on the same node")
+	createWalletAlias := createWalletCmd.String("alias", "", "Name wallet")
 	startNodeMiner := startNodeCmd.String("miner", "", "Enable mining mode and send reward to ADDRESS")
 
 	switch os.Args[1] {
@@ -119,7 +122,7 @@ func (cli *CLI) Run() {
 	}
 
 	if createWalletCmd.Parsed() {
-		cli.createWallet(nodeID)
+		cli.createWallet(nodeID, *createWalletAlias)
 	}
 
 	if listAddressesCmd.Parsed() {

@@ -31,6 +31,7 @@ func NewWallet() *Wallet {
 }
 
 // GetAddress returns wallet address
+// Address
 func (w Wallet) GetAddress() []byte {
 	pubKeyHash := HashPubKey(w.PublicKey)
 
