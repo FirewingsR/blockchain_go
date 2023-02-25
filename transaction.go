@@ -7,12 +7,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"math/big"
-	"strings"
 
 	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"log"
+	"strings"
 )
 
 const subsidy = 10
@@ -226,7 +226,7 @@ func NewUTXOTransaction(wallet *Wallet, to string, amount int, UTXOSet *UTXOSet)
 
 	tx := Transaction{nil, inputs, outputs}
 	tx.ID = tx.Hash()
-	UTXOSet.Blockchain.SignTransaction(&tx, wallet.PrivateKey)
+	UTXOSet.BlockChain.SignTransaction(&tx, wallet.PrivateKey)
 
 	return &tx
 }

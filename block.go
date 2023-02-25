@@ -9,17 +9,19 @@ import (
 
 // Block represents a block in the blockchain
 type Block struct {
-	Timestamp     int64
-	Transactions  []*Transaction
 	PrevBlockHash []byte
-	Hash          []byte
-	Nonce         int
-	Height        int
+	Timestamp     int64
+
+	Hash         []byte
+	Transactions []*Transaction
+	Nonce        int
+	Height       int
 }
 
 // NewBlock creates and returns Block
 func NewBlock(transactions []*Transaction, prevBlockHash []byte, height int) *Block {
-	block := &Block{time.Now().Unix(), transactions, prevBlockHash, []byte{}, 0, height}
+	block := &Block{prevBlockHash, time.Now().Unix(), []byte{}, transactions, 0, height}
+
 	pow := NewProofOfWork(block)
 	nonce, hash := pow.Run()
 

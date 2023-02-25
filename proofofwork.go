@@ -12,6 +12,8 @@ var (
 	maxNonce = math.MaxInt64
 )
 
+// ! 在比特币中，当一个块被挖出来以后，“target bits” 代表了区块头里存储的难度，也就是开头有多少个 0。
+// ! 这里的 24 指的是算出来的哈希前 24 位必须是 0，如果用 16 进制表示，就是前 6 位必须是 0
 const targetBits = 16
 
 // ProofOfWork represents a proof-of-work
@@ -20,7 +22,12 @@ type ProofOfWork struct {
 	target *big.Int
 }
 
-// NewProofOfWork builds and returns a ProofOfWork
+// !NewProofOfWork builds and returns a ProofOfWork
+// !
+// !target.Lsh(1, 8)
+// !fmt.Printf("%b\n", target)
+// !
+// !100000000
 func NewProofOfWork(b *Block) *ProofOfWork {
 	target := big.NewInt(1)
 	target.Lsh(target, uint(256-targetBits))

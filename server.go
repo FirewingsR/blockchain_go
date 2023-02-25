@@ -9,6 +9,11 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"os"
+	"runtime"
+	"syscall"
+
+	DEATH "github.com/vrecan/death/v3"
 )
 
 const protocol = "tcp"
@@ -51,7 +56,7 @@ type tx struct {
 	Transaction []byte
 }
 
-type verzion struct {
+type version struct {
 	Version    int
 	BestHeight int
 	AddrFrom   string
@@ -160,9 +165,9 @@ func sendTx(addr string, tnx *Transaction) {
 	sendData(addr, request)
 }
 
-func sendVersion(addr string, bc *Blockchain) {
+func sendVersion(addr string, bc *BlockChain) {
 	bestHeight := bc.GetBestHeight()
-	payload := gobEncode(verzion{nodeVersion, bestHeight, nodeAddress})
+	payload := gobEncode(version{nodeVersion, bestHeight, nodeAddress})
 
 	request := append(commandToBytes("version"), payload...)
 
@@ -185,7 +190,7 @@ func handleAddr(request []byte) {
 	requestBlocks()
 }
 
-func handleBlock(request []byte, bc *Blockchain) {
+func handleBlock(request []byte, bc *BlockChain) {
 	var buff bytes.Buffer
 	var payload block
 
@@ -215,7 +220,7 @@ func handleBlock(request []byte, bc *Blockchain) {
 	}
 }
 
-func handleInv(request []byte, bc *Blockchain) {
+func handleInv(request []byte, bc *BlockChain) {
 	var buff bytes.Buffer
 	var payload inv
 
@@ -252,7 +257,7 @@ func handleInv(request []byte, bc *Blockchain) {
 	}
 }
 
-func handleGetBlocks(request []byte, bc *Blockchain) {
+func handleGetBlocks(request []byte, bc *BlockChain) {
 	var buff bytes.Buffer
 	var payload getblocks
 
@@ -267,7 +272,7 @@ func handleGetBlocks(request []byte, bc *Blockchain) {
 	sendInv(payload.AddrFrom, "block", blocks)
 }
 
-func handleGetData(request []byte, bc *Blockchain) {
+func handleGetData(request []byte, bc *BlockChain) {
 	var buff bytes.Buffer
 	var payload getdata
 
@@ -296,7 +301,7 @@ func handleGetData(request []byte, bc *Blockchain) {
 	}
 }
 
-func handleTx(request []byte, bc *Blockchain) {
+func handleTx(request []byte, bc *BlockChain) {
 	var buff bytes.Buffer
 	var payload tx
 
@@ -323,6 +328,7 @@ func handleTx(request []byte, bc *Blockchain) {
 			var txs []*Transaction
 
 			for id := range mempool {
+				fmt.Printf("tx: ^s\n", mempool[id].ID)
 				tx := mempool[id]
 				if bc.VerifyTransaction(&tx) {
 					txs = append(txs, &tx)
@@ -361,9 +367,9 @@ func handleTx(request []byte, bc *Blockchain) {
 	}
 }
 
-func handleVersion(request []byte, bc *Blockchain) {
+func handleVersion(request []byte, bc *BlockChain) {
 	var buff bytes.Buffer
-	var payload verzion
+	var payload version
 
 	buff.Write(request[commandLength:])
 	dec := gob.NewDecoder(&buff)
@@ -387,7 +393,7 @@ func handleVersion(request []byte, bc *Blockchain) {
 	}
 }
 
-func handleConnection(conn net.Conn, bc *Blockchain) {
+func handleConnection(conn net.Conn, bc *BlockChain) {
 	request, err := ioutil.ReadAll(conn)
 	if err != nil {
 		log.Panic(err)
@@ -414,7 +420,7 @@ func handleConnection(conn net.Conn, bc *Blockchain) {
 		fmt.Println("Unknown command!")
 	}
 
-	conn.Close()
+	defer conn.Close()
 }
 
 // StartServer starts a node
@@ -427,7 +433,9 @@ func StartServer(nodeID, minerAddress string) {
 	}
 	defer ln.Close()
 
-	bc := NewBlockchain(nodeID)
+	bc := NewBlockChain(nodeID)
+	defer bc.db.Close()
+	go CloseDB(bc)
 
 	if nodeAddress != knownNodes[0] {
 		sendVersion(knownNodes[0], bc)
@@ -462,4 +470,16 @@ func nodeIsKnown(addr string) bool {
 	}
 
 	return false
+}
+
+// 安全的 DB close
+func CloseDB(bc *BlockChain) {
+	// SIGINT, SIGTERM : unix, linux / Interrupt : window
+	d := DEATH.NewDeath(syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+
+	d.WaitForDeathWithFunc(func() {
+		defer os.Exit(1)
+		defer runtime.Goexit()
+		bc.db.Close()
+	})
 }

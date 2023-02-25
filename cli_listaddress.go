@@ -2,17 +2,16 @@ package main
 
 import (
 	"fmt"
-	"log"
 )
 
 func (cli *CLI) listAddresses(nodeID string) {
-	wallets, err := NewWallets(nodeID)
-	if err != nil {
-		log.Panic(err)
-	}
-	addresses := wallets.GetAddresses()
+	wallets := cli.wallets
+	// if err != nil {
+	// 	log.Panic(err)
+	// }
+	addresses := wallets.GetAllAliases()
 
-	for _, address := range addresses {
-		fmt.Println(address)
+	for _, alias := range addresses {
+		fmt.Println(wallets.GetAddress(alias), " alias: ", alias)
 	}
 }

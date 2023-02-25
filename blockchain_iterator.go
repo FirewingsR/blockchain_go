@@ -7,18 +7,18 @@ import (
 )
 
 // BlockchainIterator is used to iterate over blockchain blocks
-type BlockchainIterator struct {
-	currentHash []byte
-	db          *bolt.DB
+type BlockChainIterator struct {
+	curHash []byte
+	db      *bolt.DB
 }
 
 // Next returns next block starting from the tip
-func (i *BlockchainIterator) Next() *Block {
+func (iter *BlockChainIterator) Next() *Block {
 	var block *Block
 
-	err := i.db.View(func(tx *bolt.Tx) error {
+	err := iter.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(blocksBucket))
-		encodedBlock := b.Get(i.currentHash)
+		encodedBlock := b.Get(iter.curHash)
 		block = DeserializeBlock(encodedBlock)
 
 		return nil
@@ -28,7 +28,7 @@ func (i *BlockchainIterator) Next() *Block {
 		log.Panic(err)
 	}
 
-	i.currentHash = block.PrevBlockHash
+	iter.curHash = block.PrevBlockHash
 
 	return block
 }

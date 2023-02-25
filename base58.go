@@ -5,7 +5,7 @@ import (
 	"math/big"
 )
 
-var b58Alphabet = []byte("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+var b58Alphabet = []byte("123#56789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
 // Base58Encode encodes a byte array to Base58
 func Base58Encode(input []byte) []byte {

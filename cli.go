@@ -9,7 +9,9 @@ import (
 )
 
 // CLI responsible for processing command line arguments
-type CLI struct{}
+type CLI struct {
+	wallets *Wallets
+}
 
 func (cli *CLI) printUsage() {
 	fmt.Println("Usage:")
@@ -31,17 +33,17 @@ func (cli *CLI) validateArgs() {
 }
 
 // Run parses command line arguments and processes commands
-func (cli *CLI) Run() {
+func (cli *CLI) Run(nodeID string) {
 	cli.validateArgs()
 
-	nodeID := os.Getenv("NODE_ID")
-	if nodeID == "" {
-		fmt.Printf("NODE_ID env. var is not set!")
-		os.Exit(1)
-	}
+	// nodeID := os.Getenv("NODE_ID")
+	// if nodeID == "" {
+	// 	fmt.Printf("NODE_ID env. var is not set!")
+	// 	os.Exit(1)
+	// }
 
 	getBalanceCmd := flag.NewFlagSet("getbalance", flag.ExitOnError)
-	createBlockchainCmd := flag.NewFlagSet("createblockchain", flag.ExitOnError)
+	createBlockChainCmd := flag.NewFlagSet("createblockchain", flag.ExitOnError)
 	createWalletCmd := flag.NewFlagSet("createwallet", flag.ExitOnError)
 	listAddressesCmd := flag.NewFlagSet("listaddresses", flag.ExitOnError)
 	printChainCmd := flag.NewFlagSet("printchain", flag.ExitOnError)
@@ -50,11 +52,12 @@ func (cli *CLI) Run() {
 	startNodeCmd := flag.NewFlagSet("startnode", flag.ExitOnError)
 
 	getBalanceAddress := getBalanceCmd.String("address", "", "The address to get balance for")
-	createBlockchainAddress := createBlockchainCmd.String("address", "", "The address to send genesis block reward to")
+	createBlockChainAddress := createBlockChainCmd.String("address", "", "The address to send genesis block reward to")
 	sendFrom := sendCmd.String("from", "", "Source wallet address")
 	sendTo := sendCmd.String("to", "", "Destination wallet address")
 	sendAmount := sendCmd.Int("amount", 0, "Amount to send")
 	sendMine := sendCmd.Bool("mine", false, "Mine immediately on the same node")
+	createWalletAlias := createWalletCmd.String("alias", "", "Name wallet")
 	startNodeMiner := startNodeCmd.String("miner", "", "Enable mining mode and send reward to ADDRESS")
 
 	switch os.Args[1] {
@@ -64,7 +67,7 @@ func (cli *CLI) Run() {
 			log.Panic(err)
 		}
 	case "createblockchain":
-		err := createBlockchainCmd.Parse(os.Args[2:])
+		err := createBlockChainCmd.Parse(os.Args[2:])
 		if err != nil {
 			log.Panic(err)
 		}
@@ -111,16 +114,16 @@ func (cli *CLI) Run() {
 		cli.getBalance(*getBalanceAddress, nodeID)
 	}
 
-	if createBlockchainCmd.Parsed() {
-		if *createBlockchainAddress == "" {
-			createBlockchainCmd.Usage()
+	if createBlockChainCmd.Parsed() {
+		if *createBlockChainAddress == "" {
+			createBlockChainCmd.Usage()
 			os.Exit(1)
 		}
-		cli.createBlockchain(*createBlockchainAddress, nodeID)
+		cli.createBlockChain(*createBlockChainAddress, nodeID)
 	}
 
 	if createWalletCmd.Parsed() {
-		cli.createWallet(nodeID)
+		cli.createWallet(nodeID, *createWalletAlias)
 	}
 
 	if listAddressesCmd.Parsed() {
