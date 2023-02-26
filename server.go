@@ -1,18 +1,29 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"crypto/rand"
 	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	mrand "math/rand"
 	"net"
 	"os"
 	"runtime"
 	"syscall"
 
+	"github.com/libp2p/go-libp2p"
+	crypto "github.com/libp2p/go-libp2p/core/crypto"
+	host "github.com/libp2p/go-libp2p/core/host"
+	network "github.com/libp2p/go-libp2p/core/network"
+	peer "github.com/libp2p/go-libp2p/core/peer"
+	peerstore "github.com/libp2p/go-libp2p/core/peerstore"
+	ma "github.com/multiformats/go-multiaddr"
 	DEATH "github.com/vrecan/death/v3"
 )
 
@@ -20,6 +31,12 @@ const protocol = "tcp"
 const nodeVersion = 1
 const commandLength = 12
 
+var (
+	chain *BlockChain
+	ha    host.Host
+)
+
+// nodePeerId
 var nodeAddress string
 var miningAddress string
 var knownNodes = []string{"localhost:3000"}
@@ -111,7 +128,7 @@ func sendBlock(addr string, b *Block) {
 	sendData(addr, request)
 }
 
-func sendData(addr string, data []byte) {
+func sendDataNet(addr string, data []byte) {
 	conn, err := net.Dial(protocol, addr)
 	if err != nil {
 		fmt.Printf("%s is not available\n", addr)
@@ -163,6 +180,15 @@ func sendTx(addr string, tnx *Transaction) {
 	request := append(commandToBytes("tx"), payload...)
 
 	sendData(addr, request)
+}
+
+// 发送Transaction（如果传输一次后结束）
+func sendTxOnce(addr string, tnx *Transaction) {
+	data := tx{nodeAddress, tnx.Serialize()}
+	payload := gobEncode(data)
+	request := append(commandToBytes("tx"), payload...)
+
+	sendDataOnce(addr, request)
 }
 
 func sendVersion(addr string, bc *BlockChain) {
@@ -482,4 +508,210 @@ func CloseDB(bc *BlockChain) {
 		defer runtime.Goexit()
 		bc.db.Close()
 	})
+}
+
+func makeBasicHost(lintenPost int, secio bool, randseed int64) (host.Host, error) {
+
+	// 如果randseed为0，就不是完美的随机值。将使用可预测值生成相同的priv。
+
+	var r io.Reader
+
+	if randseed == 0 {
+		r = rand.Reader
+	} else {
+		r = mrand.New(mrand.NewSource(randseed))
+	}
+
+	//创建此主机的key pair
+	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, r)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := []libp2p.Option{
+		libp2p.ListenAddrStrings(fmt.Sprintf("ip4/0.0.0.0/tcp/%d", lintenPost)),
+		libp2p.Identity(priv),
+		libp2p.DisableRelay(),
+	}
+
+	return libp2p.New(opts...)
+
+}
+
+// !发送{data}（cmd+payload）
+// !p2p使用peer ID进行通信
+func sendData(destPeerID string, data []byte) {
+	peerID, err := peer.Decode(destPeerID)
+
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// 创建{ha}=>{peerID}的Stream
+	// 此Stream将由{peerID}主机的steamHandler处理
+
+	s, err := ha.NewStream(context.Background(), peerID, "p2p/1.0.0")
+
+	if err != nil {
+
+		log.Printf("%s is not reachable\n", destPeerID)
+
+		// TODO：从KnownNodes中删除无法通信的{peer}
+
+		var updatedPeers []string
+		for _, node := range knownNodes {
+			if node != destPeerID {
+				updatedPeers = append(updatedPeers, node)
+			}
+		}
+
+		knownNodes = updatedPeers
+	}
+
+	defer s.Close()
+
+	_, err = s.Write(data)
+	if err != nil {
+		log.Panic(err)
+	}
+}
+
+// 向{targetPeer}发送{data}
+// 创建并发送一次性host
+func sendDataOnce(targetPeer string, data []byte) {
+	host, err := libp2p.New()
+	if err != nil {
+		log.Panic(err)
+	}
+	defer host.Close()
+
+	destPeerID := addAddrToPeerstore(host, targetPeer)
+	sendData(peer.Encode(destPeerID), data)
+}
+
+func getHostAddress(_ha host.Host) string {
+	hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("ipfs%s", _ha.ID().Pretty()))
+
+	// 现在我们可以建立一个完整的多地址来访问这个主机
+	// 通过封装两个地址：
+	addr := _ha.Addrs()[0]
+	return addr.Encapsulate(hostAddr).String()
+}
+
+func handleStream(s network.Stream) {
+	defer s.Close()
+
+	// 为Non blocking read/write创建缓冲流
+	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+
+	// connection处理异步处理为go例程
+	go HandleP2PConnection(rw)
+}
+
+func HandleP2PConnection(rw *bufio.ReadWriter) {
+	panic("unimplemented")
+}
+
+// 启动Host。
+func startHost(listenPort int, minter string, secio bool, randseed int64, targetPeer string) {
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	//将minter的地址存储在全局变量中。
+	miningAddress = minter
+
+	//{listenPort}将被用作nodeId。
+
+	nodeId := fmt.Sprintf("%d", listenPort)
+	chain = NewBlockChain(nodeId)
+	go CloseDB(chain) // 等待硬件中断并安全关闭DB的函数
+	defer chain.db.Close()
+
+	// 创建p2p host
+	host, err := makeBasicHost(listenPort, secio, randseed)
+
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// 将{host}存储在全局变量{ha}中
+	ha = host
+
+	// {nodePeerId}：此节点的peer ID。
+	// 通信使用Peer ID
+	nodeAddress = peer.Encode(host.ID())
+
+	if len(knownNodes) == 0 {
+		//KnownNodes[0]是自己
+		knownNodes = append(knownNodes, nodeAddress)
+	}
+
+	if targetPeer == "" {
+		//倾听。
+		runListener(ctx, ha, listenPort, secio)
+	} else {
+		//连接正在listen的服务器。
+		runSender(ctx, ha, targetPeer)
+	}
+
+	// Wait forever
+	select {}
+
+}
+
+// 启动listening server（中央服务器）
+func runListener(ctx context.Context, ha host.Host, listenPort int, secio bool) {
+
+	fullAddr := getHostAddress(ha)
+	log.Printf("I am %s\n", fullAddr)
+
+	// 设置StreamHandler
+	// {handleStream}是收到stream时调用的处理程序函数
+	// p2p/1.0.0是user-defined protocal
+
+	ha.SetStreamHandler("/p2p/1.0.0", handleStream)
+
+	log.Printf("Now run \"go run main.go startp2p -dest %s\" on a different terminal\n", fullAddr)
+
+}
+
+// 设置StreamHandler，并向{targetPeer}发送版本信息。
+func runSender(ctx context.Context, ha host.Host, targetPeer string) {
+
+	fullAddr := getHostAddress(ha)
+	log.Printf("I am %s\n", fullAddr)
+
+	ha.SetStreamHandler("/p2p/1.0.0", handleStream)
+
+	// 将targetPeer保存在ha的Peerstore中，并接收destination的peerId。
+
+	destPeerID := addAddrToPeerstore(ha, targetPeer)
+
+	// 将{chain}的版本发送给{destPeerID}
+	sendVersion(peer.Encode(destPeerID), chain)
+
+}
+
+// 接收peer的{addr}，解析为multiaddress，然后保存到host的peerstore中
+// 如果您通过该信息知道peer ID，就可以知道如何进行通信
+// 返回peer的ID
+func addAddrToPeerstore(ha host.Host, addr string) peer.ID {
+	// 解析到multiaddress后
+	ipfsaddr, err := ma.NewMultiaddr(addr)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	// 从multiaddress获取Address和PeerID信息
+	info, err := peer.AddrInfoFromP2pAddr(ipfsaddr)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	// 让LibP2P参考
+	// 将Peer ID和address存储在peerstore中
+	ha.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
+	return info.ID
+
 }

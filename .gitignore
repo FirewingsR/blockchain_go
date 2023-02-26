@@ -2,3 +2,4 @@
 example
 *.db
 *.dat
+*test.go
