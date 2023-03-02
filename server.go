@@ -15,14 +15,19 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 
+	"github.com/dgraph-io/badger"
 	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	crypto "github.com/libp2p/go-libp2p/core/crypto"
 	host "github.com/libp2p/go-libp2p/core/host"
 	network "github.com/libp2p/go-libp2p/core/network"
 	peer "github.com/libp2p/go-libp2p/core/peer"
 	peerstore "github.com/libp2p/go-libp2p/core/peerstore"
+	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	ma "github.com/multiformats/go-multiaddr"
 	DEATH "github.com/vrecan/death/v3"
 )
@@ -32,8 +37,10 @@ const nodeVersion = 1
 const commandLength = 12
 
 var (
-	chain *BlockChain
-	ha    host.Host
+	chain  *BlockChain
+	peers  *Peers
+	ha     host.Host
+	nodeId string // 지금 노드의 nodeId
 )
 
 // nodePeerId
@@ -197,6 +204,8 @@ func sendVersion(addr string, bc *BlockChain) {
 
 	request := append(commandToBytes("version"), payload...)
 
+	log.Printf("Send Version {version: %d, height: %d} to %s\n", ver, bestHeight, addr)
+
 	sendData(addr, request)
 }
 
@@ -327,7 +336,7 @@ func handleGetData(request []byte, bc *BlockChain) {
 	}
 }
 
-func handleTx(request []byte, bc *BlockChain) {
+func handleTxNet(request []byte, bc *BlockChain) {
 	var buff bytes.Buffer
 	var payload tx
 
@@ -389,6 +398,72 @@ func handleTx(request []byte, bc *BlockChain) {
 			if len(mempool) > 0 {
 				goto MineTransactions
 			}
+		}
+	}
+}
+
+func handleTx(request []byte, bc *BlockChain) {
+	var buff bytes.Buffer
+	var payload tx
+
+	buff.Write(request[commandLength:])
+	dec := gob.NewDecoder(&buff)
+	err := dec.Decode(&payload)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	txData := payload.Transaction
+	tx := DeserializeTransaction(txData)
+	mempool[hex.EncodeToString(tx.ID)] = tx
+
+	log.Printf("%s received Tx, now %d txs in memoryPool\n", nodeAddress, len(mempool))
+
+	for _, node := range knownNodes {
+		if node != nodeAddress && node != payload.AddFrom {
+			sendInv(node, "tx", [][]byte{tx.ID})
+		}
+	}
+
+	if len(mempool) >= 2 && len(miningAddress) > 0 {
+	MineTransactions:
+		var txs []*Transaction
+
+		for id := range mempool {
+			fmt.Printf("tx: ^s\n", mempool[id].ID)
+			tx := mempool[id]
+			if bc.VerifyTransaction(&tx) {
+				txs = append(txs, &tx)
+			}
+		}
+
+		if len(txs) == 0 {
+			fmt.Println("All transactions are invalid! Waiting for new ones...")
+			return
+		}
+
+		cbTx := NewCoinbaseTX(miningAddress, "")
+		txs = append(txs, cbTx)
+
+		newBlock := bc.MineBlock(txs)
+		UTXOSet := UTXOSet{bc}
+		UTXOSet.Reindex()
+
+		fmt.Println("New block is mined!")
+
+		for _, tx := range txs {
+			txID := hex.EncodeToString(tx.ID)
+			delete(mempool, txID)
+		}
+
+		for _, node := range knownNodes {
+			if node != nodeAddress {
+				sendInv(node, "block", [][]byte{newBlock.Hash})
+			}
+		}
+
+		if len(mempool) > 0 {
+			goto MineTransactions
 		}
 	}
 }
@@ -510,6 +585,17 @@ func CloseDB(bc *BlockChain) {
 	})
 }
 
+func CloseDB2(db *badger.DB) {
+	// SIGINT, SIGTERM : unix, linux / Interrupt : window
+	d := DEATH.NewDeath(syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+
+	d.WaitForDeathWithFunc(func() {
+		defer os.Exit(1)
+		defer runtime.Goexit()
+		db.Close()
+	})
+}
+
 func makeBasicHost(lintenPost int, secio bool, randseed int64) (host.Host, error) {
 
 	// 如果randseed为0，就不是完美的随机值。将使用可预测值生成相同的priv。
@@ -529,7 +615,7 @@ func makeBasicHost(lintenPost int, secio bool, randseed int64) (host.Host, error
 	}
 
 	opts := []libp2p.Option{
-		libp2p.ListenAddrStrings(fmt.Sprintf("ip4/0.0.0.0/tcp/%d", lintenPost)),
+		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", lintenPost)),
 		libp2p.Identity(priv),
 		libp2p.DisableRelay(),
 	}
@@ -550,11 +636,15 @@ func sendData(destPeerID string, data []byte) {
 	// 创建{ha}=>{peerID}的Stream
 	// 此Stream将由{peerID}主机的steamHandler处理
 
-	s, err := ha.NewStream(context.Background(), peerID, "p2p/1.0.0")
+	s, err := ha.NewStream(context.Background(), peerID, "/p2p/1.0.0")
 
 	if err != nil {
 
-		log.Printf("%s is not reachable\n", destPeerID)
+		log.Printf("%s is \033[1;33mnot reachable\033[0m\n", peerID)
+
+		peers.deletePeer(peerID)
+
+		log.Printf("%s deleted\n", peerID)
 
 		// TODO：从KnownNodes中删除无法通信的{peer}
 
@@ -590,7 +680,7 @@ func sendDataOnce(targetPeer string, data []byte) {
 }
 
 func getHostAddress(_ha host.Host) string {
-	hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("ipfs%s", _ha.ID().Pretty()))
+	hostAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ipfs/%s", _ha.ID().Pretty()))
 
 	// 现在我们可以建立一个完整的多地址来访问这个主机
 	// 通过封装两个地址：
@@ -605,25 +695,51 @@ func handleStream(s network.Stream) {
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 
 	// connection处理异步处理为go例程
-	go HandleP2PConnection(rw)
+	go HandleP2PConnection(rw, chain)
 }
 
-func HandleP2PConnection(rw *bufio.ReadWriter) {
-	panic("unimplemented")
+func HandleP2PConnection(rw *bufio.ReadWriter, bc *BlockChain) {
+	request, err := ioutil.ReadAll(rw)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	command := bytesToCommand(request[:commandLength])
+
+	fmt.Printf("Received %s command\n", command)
+
+	switch command {
+	case "addr":
+		handleAddr(request)
+	case "block":
+		handleBlock(request, bc)
+	case "inv":
+		handleInv(request, bc)
+	case "getblocks":
+		handleGetBlocks(request, bc)
+	case "getdata":
+		handleGetData(request, bc)
+	case "tx":
+		handleTx(request, bc)
+	case "version":
+		handleVersion(request, bc)
+	default:
+		log.Println("\033[1;31mUnknown command!\033[0m", string(request))
+	}
 }
 
 // 启动Host。
-func startHost(listenPort int, minter string, secio bool, randseed int64, targetPeer string) {
+func startHost(listenPort int, minter string, secio bool, randseed int64, rendezvous string, bootstrapPeers []ma.Multiaddr) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	//将minter的地址存储在全局变量中。
+	// 将minter的地址存储在全局变量中。
 	miningAddress = minter
 
-	//{listenPort}将被用作nodeId。
-
-	nodeId := fmt.Sprintf("%d", listenPort)
+	// {listenPort}将被用作nodeId
+	nodeId = fmt.Sprintf("%d", listenPort)
+	// 将chain存储在全局变量中
 	chain = NewBlockChain(nodeId)
 	go CloseDB(chain) // 等待硬件中断并安全关闭DB的函数
 	defer chain.db.Close()
@@ -647,17 +763,133 @@ func startHost(listenPort int, minter string, secio bool, randseed int64, target
 		knownNodes = append(knownNodes, nodeAddress)
 	}
 
-	if targetPeer == "" {
-		//倾听。
-		runListener(ctx, ha, listenPort, secio)
-	} else {
-		//连接正在listen的服务器。
-		runSender(ctx, ha, targetPeer)
+	fullAddr := getHostAddress(ha)
+	log.Printf("I am %s\n", fullAddr)
+
+	ha.SetStreamHandler("/p2p/1.0.0", handleStream)
+
+	// 加载保存的对等方
+	peers, err = getPeerDB(nodeId)
+	if err != nil {
+		log.Println(err)
+	}
+	go CloseDB2(peers.Database)
+	defer peers.Database.Close()
+
+	// 首先尝试连接到存储的对等
+	connected := connectToKnownPeer(host, peers)
+	// 如果未连接到存储的对等
+	if !connected {
+		peerDiscovery(ctx, host, peers, rendezvous, bootstrapPeers)
 	}
 
 	// Wait forever
 	select {}
 
+}
+
+// 联系存储在DB中的Peer
+func connectToKnownPeer(host host.Host, peers *Peers) bool {
+	// 输出保存的peer
+	peerAddrInfos := peers.findAllAddrInfo()
+	log.Println("\033[1;36mIn peers DB:\033[0m")
+	for _, peerAddrInfo := range peerAddrInfos {
+		fmt.Printf("%s\n", peerAddrInfo)
+	}
+	// 首先连接到存储的对等方
+	for _, peerinfo := range peerAddrInfos {
+		// 创建{host}=>{peer}的Stream。
+		// 此Stream将由{peer}主机的steamHandler处理。
+		s, err := host.NewStream(context.Background(), peerinfo.ID, "/p2p/1.0.0")
+		if err != nil {
+			log.Printf("%s is \033[1;33mnot reachable\033[0m\n", peerinfo.ID)
+			// 如果无法连接，请从peer DB中删除它。
+			peers.deletePeer(peerinfo.ID)
+			log.Printf("%s => %s deleted\n", peerinfo.ID, peerinfo.Addrs)
+			// TODO：从KnownPeers中删除无法通信的{peer}。
+			var updatedPeers []string
+			// 从KnownPeers中删除无法通信的{addr}。
+			for _, node := range knownNodes {
+				if node != peer.Encode(peerinfo.ID) {
+					updatedPeers = append(updatedPeers, node)
+				}
+			}
+			knownNodes = updatedPeers
+		} else {
+			// 连接后发送Version消息
+			sendVersion(peer.Encode(peerinfo.ID), chain)
+			s.Close()
+			return true
+		}
+	}
+	return false
+}
+
+// 从rendezvous point获取并连接其他对等方的信息。
+func peerDiscovery(ctx context.Context, host host.Host, peers *Peers, rendezvous string, bootstrapPeers []ma.Multiaddr) {
+	kademliaDHT, err := dht.New(ctx, host)
+	if err != nil {
+		panic(err)
+	}
+	log.Println("Bootstrapping the DHT")
+	if err = kademliaDHT.Bootstrap(ctx); err != nil {
+		panic(err)
+	}
+	// Bootstrap节点告知网络中其他节点的信息。
+	// 当然，我们的信息也会传递给连接的其他节点。
+	var wg sync.WaitGroup
+	for _, peerAddr := range bootstrapPeers {
+		peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := host.Connect(ctx, *peerinfo); err != nil {
+				log.Fatalln(err)
+			} else {
+				log.Println("Connection established with bootstrap node:", *peerinfo)
+			}
+		}()
+	}
+	wg.Wait()
+	// 在rendezvous point上写下我们的信息
+	log.Println("Announcing ourselves...")
+	routingDiscovery := drouting.NewRoutingDiscovery(kademliaDHT)
+	dutil.Advertise(ctx, routingDiscovery, rendezvous)
+	log.Println("Successfully announced!")
+	log.Println("Searching for other peers...")
+	log.Printf("Now run \"go run main.go startp2p -rendezvous %s\" on a different terminal\n", rendezvous)
+	// 查找peer[]返回peer.AddrInfo。
+	peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
+	if err != nil {
+		panic(err)
+	}
+	for p := range peerChan {
+		if p.ID == host.ID() {
+			continue
+		}
+		// 如果您有有效的Addrs
+		if len(p.Addrs) > 0 {
+			log.Println("\033[1;36mConnecting to:\033[0m", p)
+			// 将此信息存储在Peer DB中
+			peers.addPeer(p)
+			// 打开Stream
+			s, err := ha.NewStream(context.Background(), p.ID, "/p2p/1.0.0")
+			if err != nil {
+				log.Printf("%s is \033[1;33mnot reachable\033[0m\n", p.ID)
+				// 如果Stream创建出现错误，请从PeerDB中删除Peer。
+				peers.deletePeer(p.ID)
+				log.Printf("%s => %s \033[1;33mdeleted\033[0m\n", p.ID, p.Addrs)
+			} else {
+				s.Close()
+				// 向{p}发送{Chain}的版本
+				sendVersion(peer.Encode(p.ID), chain)
+			}
+		} else {
+			// Peer无效可能存储在DB中，请删除它。
+			peers.deletePeer(p.ID)
+			log.Println("\033[1;31mINVAILD ADDR\033[0m", p)
+		}
+	}
 }
 
 // 启动listening server（中央服务器）

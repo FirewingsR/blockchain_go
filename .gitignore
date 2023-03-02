@@ -1,5 +1,7 @@
 .idea
 example
+peers_*/*
+*_test.go
 *.db
 *.dat
 *test.go

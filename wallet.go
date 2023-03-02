@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/ripemd160"
 )
 
-const ver = byte(0x00)
+const ver = 1
 
 // const walletFile = "wallet.dat"
 const addressChecksumLen = 4
